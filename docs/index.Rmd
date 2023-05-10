@@ -1,0 +1,219 @@
+---
+title: "Tweedie GLM model in R for Cost Data"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::downcute:
+    self_contained: true
+    default_style: "light"
+    downcute_theme: "default"
+---
+
+
+```{r setup, include=FALSE}
+## Global options
+knitr::opts_chunk$set(cache = TRUE)
+```
+
+## Introduction
+Cost data is difficult to model due to the right-skewed nature of the distribution and the large point mass at zero. Generalized linear models (GLM) allow flexibility when it comes to modeling data distributions that are skewed. A common solution to modeling cost data is the GLM gamma model, which can address the right-skewed nature of the distribution. However, there are limits to the GLM gamma model, particularly when it comes to subjects having zero costs. These are not easily resolved with the GLM gamma model that uses a log link. An alternative is to use the Tweedie GLM model framework where we can use the different combinations of the family and link function to handle the zero costs issue. 
+
+In R, when you try to use the GLM gamma model with log link on cost data, you may run into problems because the gamma model will not accept values that are non-positive. This means that cost values that are negative or zero will not run. Using the Tweedie GLM framework, we can get around the problem by using a Gamma family with an identity link. The link function in a Tweedie GLM framework is a power function. A power function = 0 is akin to a log link, and a power function = 1 is akin to an identity link. 
+
+## Motivating example
+We will use data from the Agency for Healthcare Research and Quality (AHRQ) Medical Expenditure Panel Survey (MEPS) from 2020 to evaluate whether there are gender disparities in total healthcare expenditures across different poverty categories. 
+
+The objectives are:
+
+* 1: Build a Tweedie GLM gamma model
+
+* 2: Interpret the interaction term between `gender` and `povcat20` variables
+
+* 3: Estimate and interpret the marginal effects
+
+* 4: Plot the marginal effects
+
+## Load libraries
+There are several packages that we will need for this tutorial. 
+
+```{r, echo = TRUE, message = FALSE, warning = FALSE}
+#### Load libraries
+library("haven")
+library("ResourceSelection")  ## Package to perform the Hosmer-Lemeshow GOF test
+library("survey")
+library("MEPS")
+library("prediction")
+library("margins")
+library("ggeffects")
+library("sjPlot")
+library("statmod")
+```
+
+## Import data from MEPS
+We will import that data from MEPS and create an object `data1` to perform our analysis. 
+
+```{r, echo = TRUE, message = FALSE, warning = FALSE}
+hc2020 = read_MEPS(file = "h224")
+names(hc2020) <- tolower(names(hc2020))
+
+keep_hc2020 <- subset(hc2020, 
+                      select = c(dupersid, perwt20f, varstr, varpsu, totexp20, sex, povcat20))
+head(keep_hc2020)
+
+data1 <- keep_hc2020
+```
+
+## Factor variables
+We will factor two variables that will be used in our example. These variables are `sex` and `povcat20`. We will create a new variable for sex called `gender` that uses a binary variable (0 = female, 1 = male). Poverty category has 5 levels (`1`, `2`, `3`, `4`, and `5`) that denotes Poor, Near Poor, Low Income, Middle Income, and High Income. 
+
+```{r, echo = TRUE, message = FALSE, warning = FALSE, results = "hide"}
+levels(data1$povcat20)
+format(data1$povcat20)
+factor(data1$povcat20, levels = c(1, 2, 3, 4, 5))
+
+data1$gender[data1$sex == 1] = 0
+data1$gender[data1$sex == 2] = 1
+table(data1$gender)
+factor(data1$gender, levels = c(0, 1))
+```
+
+
+## Apply survey weights
+We next apply the survey weights to our data `data1`.
+
+```{r, echo = TRUE, message = FALSE, warning = FALSE}
+## Apply the survey weights to the dataframe using the svydesign function
+options(survey.lonely.psu = 'adjust')
+
+mepsdsgn = svydesign(
+  id = ~varpsu,
+  strata = ~varstr,
+  weights = ~perwt20f,
+  data = data1,
+  nest = TRUE)
+```
+
+## Tweedie GLM model
+We can construct our model using the Tweedie GLM framework. We will include an interaction term `gender:factor(povcat20)` that will provide us with various levels of change across the poverty category groups and by gender. The `var.power = 2` option indicates that this is a gamma model. The `link.power = 1` option indicates that we are using an identity link. (Note: `link.power = 0` indicates a log link.) More information about the Tweedie GLM framework can be found on the [R CRAN site](https://search.r-project.org/CRAN/refmans/statmod/html/tweedie.html).
+
+```{r, echo = TRUE, message = FALSE, warning = FALSE}
+### Model 3 (Y ~ gender + povcat20 + gender*povcat20) - This includes an interaction term
+model1 <- svyglm(totexp20 ~ gender + factor(povcat20) + gender:factor(povcat20), 
+                 mepsdsgn, 
+                 family = tweedie(var.power = 2, link.power = 1))
+summary(model1)
+confint(model1)
+```
+
+We next perform the goodness of fit (GOF) tests to inspect if the model has issues with heteroscedastiticty or specification. 
+
+```{r, echo = TRUE, message = FALSE, warning = FALSE}
+#### GOF test - Pearson correlation
+predict.model1 <- prediction(model1, 
+                             type = "response", 
+                             calculate_se = TRUE)
+res <- data1$totexp20 - predict.model1$fit
+pwcorr <- cor.test(predict.model1$fit, res)
+pwcorr
+
+### GOF test - Pregibon's link test
+xb2 <- predict.model1$fit * predict.model1$fit  ## Square the predicted values
+linear.model <- glm(data1$totexp20 ~ predict.model1$fit + xb2, 
+                    family = gaussian(link = "identity"))
+summary(linear.model)
+
+### GOF test - Modified Hosmer-Lemeshow test with 10 deciles
+hoslem.test(data1$totexp20, predict.model1$fit, g = 10)
+```
+
+There does not appear to be any issues with heteroscedastiticty or misspecification. 
+
+## Interpreting the marginal effects
+To understand how marginal effects work, we should list out the output from the Tweedie GLM gamma model. 
+
+```{r, echo = TRUE, message = FALSE, warning = FALSE}
+model1 %>%
+  tbl_regression(intercept = TRUE) %>%
+  bold_labels() %>%
+  bold_p(t = 0.05)
+```
+
+For the `gender` variable, the beta coefficient indicates that the difference in cost between male and female subjects is \$1107 (95% CI: \$128, \$2087). However, we have to be careful with this interpretation because the interaction term includes `gender`, which we can't ignore. 
+
+Let's estimate the total healthcare expenditure for a male and female with poverty category = 2 using the beta coefficients from the model output. 
+
+We start with writing out the two formulas for the total expenditures for males and females. We fill in some of the parameters that we know. For instance, `gender = 1` is male and `gender = 0` is female. The $\beta_0$ is the intercept, which cancels out. Another parameter that cancels out is `povcat20`. 
+
+```{r , echo=FALSE, out.width = '100%'}
+knitr::include_graphics("C:\\Users\\mbounthavong\\Dropbox\\Marks blog\\R - Cost as a dependent variable\\Tweedie distribution\\Figures\\Figure 1.png")
+```
+
+Now, we can fill in the beta parameters. For $\beta_1$, the value is 1107; for $\beta_3$, the value is -2989. You can plug this into the equation. Since we are interacting `gender` with `povcat20`, multiplying `gender = 0` with `povcat20 = 2` results in zero. Therefore, we only carry over the $\beta_3$ of the interaction term with `gender = 1`, which is -2989.
+
+Therefore, the only coefficients that matter are $\beta_1$ and $\beta_3$. Combining these coefficients will results in -\$1882, the difference in total healthcare expenditures between males and females. 
+
+```{r , echo=FALSE, out.width = '100%'}
+knitr::include_graphics("C:\\Users\\mbounthavong\\Dropbox\\Marks blog\\R - Cost as a dependent variable\\Tweedie distribution\\Figures\\Figure 2.png")
+```
+
+Interaction terms are a little tricky. We can interpret them in two ways. For instance, the interaction term between `gender` and `povcat20` can be interpreted as the difference in total expenditures between males and females at poverty category = 2. Or we can interpret this as the difference in total expenditure between males (`gender = 1`) who are in poverty category 2 versus poverty category 1. 
+
+These two interpretation are both correct. It will be up to you to determine how you want to articulate this. 
+
+There is a nice and convenient method to estimate the marginal effects using the `margins` command in R. For this example, we will use the `at` option to indicate the stratification for `gender`. This will generate an output that will give us the marginal effect (or the difference in total healthcare expenditure) for each poverty category among male and female subjects. 
+
+```{r, echo = TRUE, message = FALSE, warning = FALSE}
+
+### Marginal effects of gender on poverty
+margins1 <- margins(model1, type = "response", design = mepsdsgn, at = list(gender = 0:1))
+summary(margins1)
+```
+
+The output from the `margins` command include the `AME` or average marginal effect and the corresponding 95% CI. For instance, the average marginal effect of `povcat20 = 2` versus `povcat20 = 1` for females `gender = 0` is \$2946 (95% CI: -\$534, \$6429). The average marginal effect of `povcat20 = 2` versus `povcat20 = 1` for males is -\$42 (95% CI: -\$1392, \$1308).
+
+You can also plot these marginal effects using the `plot_model` command. 
+
+```{r, wcho = TRUE, message = FALSE, warning = FALSE}
+### Plots the marginal effects
+plot_model(model1, type = "pred", terms = c("povcat20", "gender"))
+```
+
+This plot is very helpful to see how different the total expenditures are between males and females at each poverty category. In our example above, we looked at the marginal effect of `povcat20 = 2` versus `povcat20 = 1` for males and females. We estimated that the difference between them was -\$1882. You can visualize it on this plot. Notice the difference between the red dot and blue dot is -\$1882. 
+
+Visually, we do not see any differences in the marginal effects for each poverty category between males and females. This aligns with the out form from the marginal effects that we generated using `plot_model`. 
+
+Let's tie all this together. 
+
+```{r , echo=FALSE, out.width = '100%'}
+knitr::include_graphics("C:\\Users\\mbounthavong\\Dropbox\\Marks blog\\R - Cost as a dependent variable\\Tweedie distribution\\Figures\\Figure 3.png")
+```
+
+The differences in total healthcare expenditures between `povcat20 = 2` versus `povcat20 = 1` is clearly illustrated when you have the margins output next to the plot. Among the females, the marginal effect (or difference in total healthcare expenditures) of `povcat20 = 2` versus `povcat20 = 1` is \$2947. Among the males, the marginal effect of `povcat20 = 2` versus `povcat20 = 1` is -\$42.
+
+I created a final table that includes the crucial values from the `margins` output. But I like when the figure and table are provided side by side. 
+
+
+```{r , echo=FALSE, out.width = '100%'}
+knitr::include_graphics("C:\\Users\\mbounthavong\\Dropbox\\Marks blog\\R - Cost as a dependent variable\\Tweedie distribution\\Figures\\Figure 4.png")
+```
+
+
+## Conclusions
+Based on the Tweedie GLM gamma model, we do not see disparities in total healthcare expenditures between males and females across all poverty categories. We may need to look at other socioeconomic factors for potential disparities in total healthcare expenditures. 
+
+
+## Acknowledgements
+There were several online resources that I used to create this tutorial.
+
+Daniel Ludeceke has a great [website](https://strengejacke.github.io/sjPlot/articles/plot_interactions.html) on the `margins` and `plot_model` commands.
+
+Christopher F. Kutz's [paper, "Tweedie distributions for fitting semicontinuous health care utilization cost data,"](https://bmcmedresmethodol.biomedcentral.com/articles/10.1186/s12874-017-0445-y) is a great resource for understanding the Tweedie GLM framework. 
+
+The `statmod` package is how I was able to implement the Tweedie GLM distribution, which is located [here](https://search.r-project.org/CRAN/refmans/statmod/html/tweedie.html).
+
+Thomas J. Leeper has a great [website](https://thomasleeper.com/margins/) that provides a wonderful tutorial on using the `margins` command in R. 
+
+## Work in progress
+This is a work in progress, and I will likely update this in the future. 
+
+## Disclaimer
+This is for educational purposes only. 
