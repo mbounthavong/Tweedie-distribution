@@ -162,24 +162,31 @@ These two interpretation are both correct. It will be up to you to determine how
 There is a nice and convenient method to estimate the marginal effects using the `margins` command in R. For this example, we will use the `at` option to indicate the stratification for `gender`. This will generate an output that will give us the marginal effect (or the difference in total healthcare expenditure) for each poverty category among male and female subjects. 
 
 ```{r, echo = TRUE, message = FALSE, warning = FALSE}
-
 ### Marginal effects of gender on poverty
 margins1 <- margins(model1, type = "response", design = mepsdsgn, at = list(gender = 0:1))
 summary(margins1)
 ```
 
-The output from the `margins` command include the `AME` or average marginal effect and the corresponding 95% CI. For instance, the average marginal effect of `povcat20 = 2` versus `povcat20 = 1` for females `gender = 0` is \$2946 (95% CI: -\$534, \$6429). The average marginal effect of `povcat20 = 2` versus `povcat20 = 1` for males is -\$42 (95% CI: -\$1392, \$1308).
+The output from the `margins` command include the `AME` or average marginal effect and the corresponding 95% confidence intervals (CI). 
 
-You can also plot these marginal effects using the `plot_model` command. 
+For instance, the average marginal effect of `povcat20 = 2` versus `povcat20 = 1` for females `gender = 0` is \$2947 (95% CI: -\$534, \$6429). The average marginal effect of `povcat20 = 2` versus `povcat20 = 1` for males is -\$42 (95% CI: -\$1392, \$1308).
+
+You can also plot these marginal effects using the `plot_model` command. We set `type = pred` because we want the predicted healthcare expenditures, and include the two terms that make up the interaction (`povcat20` and `gender`).
 
 ```{r, wcho = TRUE, message = FALSE, warning = FALSE}
 ### Plots the marginal effects
 plot_model(model1, type = "pred", terms = c("povcat20", "gender"))
 ```
 
-This plot is very helpful to see how different the total expenditures are between males and females at each poverty category. In our example above, we looked at the marginal effect of `povcat20 = 2` versus `povcat20 = 1` for males and females. We estimated that the difference between them was -\$1882. You can visualize it on this plot. Notice the difference between the red dot and blue dot is -\$1882. 
+This plot is very helpful to see how different the total expenditures are between males and females at each poverty category. 
 
-Visually, we do not see any differences in the marginal effects for each poverty category between males and females. This aligns with the out form from the marginal effects that we generated using `plot_model`. 
+In our example above, we looked at the marginal effect of males and females with a `povcat20 = 2`. We estimated that the difference between them was -\$1882. You can visualize it on this plot. Notice the difference between the red dot and blue dot at `povcat20 = 2` is -\$1882. 
+
+```{r , echo=FALSE, out.width = '100%'}
+knitr::include_graphics("C:\\Users\\mbounthavong\\Dropbox\\Marks blog\\R - Cost as a dependent variable\\Tweedie distribution\\Figures\\Figure 4_0.png")
+```
+
+If you look at the 95% CIs, they overlap between the males and females. Hence, visually, we do not see any statistically differences in the marginal effects for each poverty category between males and females. This aligns with the output from the marginal effects that we generated using `plot_model`.
 
 Let's tie all this together. 
 
